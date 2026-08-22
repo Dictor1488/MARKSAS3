@@ -12,9 +12,8 @@ package com.inq.marks
 
     public class InqMarksNeerBadgeRenderer extends InqMarksBattleRendererBase
     {
-        // Use the softer Polaroid/Compact text palette instead of the saturated NEER fill colours.
-        private static const GREEN:uint = 0xA6E176;
-        private static const RED:uint   = 0xF16868;
+        private static const GREEN:uint = 0x018644;
+        private static const RED:uint   = 0xC51917;
         private static const CLICK_THRESHOLD:Number = 6.0;
         private static const ZERO_FONT_SIZE:int = 16;
 
