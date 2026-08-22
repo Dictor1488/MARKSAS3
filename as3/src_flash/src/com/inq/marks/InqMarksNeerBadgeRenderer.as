@@ -33,6 +33,7 @@ package com.inq.marks
         private static const CLICK_THRESHOLD:Number = 6.0;
 
         private var _zeroLayer:Sprite;
+        private var _zeroBg:Shape;
         private var _zeroBar:Shape;
         private var _zeroText:TextField;
         private var _currentDamage:int = 0;
@@ -54,6 +55,9 @@ package com.inq.marks
             _zeroLayer.mouseChildren = false;
             _zeroLayer.visible = false;
             addChild(_zeroLayer);
+
+            _zeroBg = new Shape();
+            _zeroLayer.addChild(_zeroBg);
 
             _zeroBar = new Shape();
             _zeroLayer.addChild(_zeroBar);
@@ -180,15 +184,23 @@ package com.inq.marks
 
         private function _drawZeroProgress():void
         {
-            if (!_zeroBar || !_zeroText) return;
-
-            var g:Graphics = _zeroBar.graphics;
-            g.clear();
+            if (!_zeroBg || !_zeroBar || !_zeroText) return;
 
             var pct:Number = _zeroDamage > 0
                 ? Math.max(0.0, Math.min(1.0, Number(_currentDamage) / Number(_zeroDamage)))
                 : 0.0;
             var fillColor:uint = (_zeroDamage > 0 && _currentDamage >= _zeroDamage) ? GREEN : RED;
+
+            // Small bottom panel in the same dark/gold visual language as NEER.
+            var bg:Graphics = _zeroBg.graphics;
+            bg.clear();
+            bg.lineStyle(0.8, GOLD, 0.36, true);
+            bg.beginFill(0x05070A, 0.52);
+            bg.drawRoundRect(BAR_X - 18, BAR_Y - 16, BAR_W + 36, 42, 8, 8);
+            bg.endFill();
+
+            var g:Graphics = _zeroBar.graphics;
+            g.clear();
 
             g.lineStyle(1.0, GOLD, 0.55, true);
             g.moveTo(BAR_X - 10, BAR_Y);
@@ -213,7 +225,7 @@ package com.inq.marks
                 var m:Matrix = new Matrix();
                 m.createGradientBox(fillW, fillH, 0.0, BAR_X + 0.5, fillY);
 
-                // Same NEER red/green palette, but with alpha growing toward current value.
+                // Same NEER red/green palette, with alpha growing toward current value.
                 g.lineStyle();
                 g.beginGradientFill(GradientType.LINEAR,
                                     [fillColor, fillColor],
