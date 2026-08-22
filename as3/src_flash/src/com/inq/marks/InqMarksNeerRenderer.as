@@ -34,16 +34,18 @@ package com.inq.marks
         private static const TANK_Y0:Number = 59;
         private static const TANK_Y1:Number = 133;
 
-        private static const GREEN:uint = 0x018644;
-        private static const RED:uint   = 0xC51917;
+        private static const GREEN:uint = 0x00B85A;
+        private static const RED:uint   = 0xD92525;
         private static const GOLD:uint  = 0xEAD7B7;
+        private static const CONTOUR_COLOR:uint = 0xD8D5CC;
 
         // tuned params (from HTML editor)
         private static const FILL_ALPHA_TOP:Number = 1.00;
-        private static const FILL_FADE_BOTTOM:Number = 1.00;  // 100%
+        // Компромісний fade: зверху 100%, знизу залишається 35% альфи.
+        private static const FILL_FADE_BOTTOM:Number = 0.65;
         private static const CENTER_FADE:Number = 0.36;
-        private static const CENTER_HIDE:Number = 0.40;
-        private static const BOTTOM_HIDE:Number = 1.00;
+        private static const CENTER_HIDE:Number = 0.25;
+        private static const BOTTOM_HIDE:Number = 0.55;
         private static const BADGE_FADE:Number = 0.94;
 
         private var _fillShape:Shape;
@@ -56,19 +58,32 @@ package com.inq.marks
         private var _deltaField:TextField;
 
         private var _silData:BitmapData;   // white silhouette (interior)
-        private var _fillResult:BitmapData; // перевикористовуваний буфер заливки
-        private var _contourResult:BitmapData; // буфер контуру з fade
+        private var _fillWork:BitmapData;   // reusable working buffer for dynamic fill
+        private var _fillResult:BitmapData; // reusable masked fill buffer
+        private var _contourResult:BitmapData; // static contour buffer with fade
+        private var _fillGradientShape:Shape;
+        private var _lastMark:Number = NaN;
+        private var _lastDelta:Number = NaN;
+        private var _lastFilledMarks:int = -1;
         private static const ORIGIN:Point = new Point(0, 0);
 
         public function InqMarksNeerRenderer()
         {
+            // Рендерер декоративний: кліки мають проходити до кнопки та drag-hit панелі.
+            mouseEnabled = false;
+            mouseChildren = false;
             _buildSilhouette();
+            _fillWork = new BitmapData(CW, CH, true, 0x00000000);
+            _fillResult = new BitmapData(CW, CH, true, 0x00000000);
+            _fillGradientShape = new Shape();
 
             _fillShape = new Shape();
             addChild(_fillShape);
 
             _contourShape = new Shape();
             addChild(_contourShape);
+            // Контур статичний: будуємо один раз, а не при кожному render().
+            _drawContourFaded();
 
             _marksShape = new Shape();
             addChild(_marksShape);
@@ -662,22 +677,21 @@ package com.inq.marks
             var tmp:BitmapData = new BitmapData(CW, CH, true, 0x00000000);
             var s:Shape = new Shape();
             var g:Graphics = s.graphics;
-            g.lineStyle(3, 0xFFFFFF, 1.0, false, "normal", "round", "round");
+            // Тонша технічна лінія маски: заливка підходить майже впритул
+            // до видимого контуру, але лишається всередині його stroke.
+            g.lineStyle(1.5, 0xFFFFFF, 1.0, false, "normal", "round", "round");
             _traceContour(g);
             tmp.draw(s);
 
             // Заливка "зовні" від кута → зовнішня зона стає непрозорим чорним 0xFF000000
             tmp.floodFill(0, 0, 0xFF000000);
 
-            // Силует = все, що НЕ дорівнює зовнішньому чорному.
-            // threshold: там де pixel == 0xFF000000 → пишемо 0x00000000 (прозоро),
-            // решта (copySource=true) копіюється як є (біла лінія / прозоре нутро).
-            // Тому спершу заллємо нутро: інвертуємо — все не-зовнішнє робимо білим.
+            // Маска заливки = тільки чиста внутрішня область контуру.
+            // Сам stroke та його anti-aliased пікселі в маску не входять, тому
+            // кольорова заливка більше не може вилізти поверх/за контур.
             _silData = new BitmapData(CW, CH, true, 0x00000000);
-            _silData.fillRect(_silData.rect, 0xFFFFFFFF);          // все біле
-            // де tmp РІВНЕ зовнішньому чорному → у силуеті прозоро
-            _silData.threshold(tmp, tmp.rect, new Point(0, 0),
-                               "==", 0xFF000000, 0x00000000, 0xFFFFFFFF, false);
+            _silData.threshold(tmp, tmp.rect, ORIGIN,
+                               "==", 0x00000000, 0xFFFFFFFF, 0xFFFFFFFF, false);
             tmp.dispose();
         }
 
@@ -691,34 +705,56 @@ package com.inq.marks
         public function dispose():void
         {
             if (_silData != null)       { _silData.dispose();       _silData = null; }
+            if (_fillWork != null)      { _fillWork.dispose();      _fillWork = null; }
             if (_fillResult != null)    { _fillResult.dispose();    _fillResult = null; }
             if (_contourResult != null) { _contourResult.dispose(); _contourResult = null; }
+            _fillGradientShape = null;
         }
 
         public function render(mark:Number, delta:Number, filledMarks:int):void
         {
-            var pct:Number = Math.max(0, Math.min(1, mark / 100.0));
-            var isUp:Boolean = delta >= 0;
+            // Візуально показуємо соті, тому дрібніші зміни не мають сенсу
+            // перераховувати через важкий BitmapData pipeline.
+            var markKey:Number = Math.round(mark * 100.0) / 100.0;
+            var deltaKey:Number = Math.round(delta * 100.0) / 100.0;
+            var markChanged:Boolean = isNaN(_lastMark) || markKey != _lastMark;
+            var deltaChanged:Boolean = isNaN(_lastDelta) || deltaKey != _lastDelta;
+            var marksChanged:Boolean = filledMarks != _lastFilledMarks;
+            if (!markChanged && !deltaChanged && !marksChanged) return;
+
+            var pct:Number = Math.max(0, Math.min(1, markKey / 100.0));
+            var isUp:Boolean = deltaKey >= 0;
+            var previousUp:Boolean = isNaN(_lastDelta) ? isUp : (_lastDelta >= 0);
+            var signChanged:Boolean = isNaN(_lastDelta) || previousUp != isUp;
             var fillColor:uint = isUp ? GREEN : RED;
 
-            _drawFill(pct, fillColor);
-            _drawContourFaded();
-            _drawMarks(filledMarks);
-            _drawBadge(delta, isUp);
+            if (markChanged || signChanged) _drawFill(pct, fillColor);
+            if (marksChanged) _drawMarks(filledMarks);
+            if (deltaChanged) _drawBadge(deltaKey, isUp);
 
-            _pctField.text = _fmt2(mark) + "%";
-            _pctField.x = 270 - _pctField.width / 2;
-            _pctField.y = 108 - _pctField.height / 2;
+            if (markChanged)
+            {
+                _pctField.text = _fmt2(markKey) + "%";
+                _pctField.x = 270 - _pctField.width / 2;
+                _pctField.y = 108 - _pctField.height / 2;
+            }
+
+            _lastMark = markKey;
+            _lastDelta = deltaKey;
+            _lastFilledMarks = filledMarks;
         }
 
         /** Fill the tank interior up to pct, with vertical alpha fade. */
         private function _drawFill(pct:Number, color:uint):void
         {
-            var fillBmp:BitmapData = new BitmapData(CW, CH, true, 0x00000000);
+            // Reuse BitmapData/Shape buffers instead of allocating and disposing
+            // them on every battle-data update.
+            _fillWork.fillRect(_fillWork.rect, 0x00000000);
+            _fillResult.fillRect(_fillResult.rect, 0x00000000);
 
-            // vertical gradient fill of the color, clipped horizontally to pct
             var fillX:Number = TANK_X0 + (TANK_X1 - TANK_X0) * pct;
-            var grad:Shape = new Shape();
+            var grad:Shape = _fillGradientShape;
+            grad.graphics.clear();
             var m:Matrix = new Matrix();
             m.createGradientBox(CW, TANK_Y1 - TANK_Y0, Math.PI / 2, 0, TANK_Y0);
             var topA:Number = FILL_ALPHA_TOP;
@@ -728,18 +764,13 @@ package com.inq.marks
             grad.graphics.drawRect(0, 0, fillX, CH);
             grad.graphics.endFill();
 
-            // composite: gradient masked by silhouette (source-in emulation)
-            fillBmp.draw(grad);
-            if (_fillResult != null) _fillResult.dispose();
-            _fillResult = new BitmapData(CW, CH, true, 0x00000000);
-            _fillResult.copyPixels(fillBmp, fillBmp.rect, new Point(0, 0), _silData, new Point(0, 0), true);
+            _fillWork.draw(grad);
+            _fillResult.copyPixels(_fillWork, _fillWork.rect, ORIGIN, _silData, ORIGIN, true);
 
             _fillShape.graphics.clear();
             _fillShape.graphics.beginBitmapFill(_fillResult, null, false, true);
             _fillShape.graphics.drawRect(0, 0, CW, CH);
             _fillShape.graphics.endFill();
-
-            fillBmp.dispose();
         }
 
         /** Draw the gold contour (solid, без ризикованої mask). */
@@ -752,7 +783,9 @@ package com.inq.marks
 
             // [1] малюємо золотий контур у BitmapData
             var line:Shape = new Shape();
-            line.graphics.lineStyle(1.05, GOLD, 1.0, false, "normal", "round", "round");
+            // Трохи товстіший non-pixel-hinted stroke дає рівніші діагоналі
+            // і не смикає контур до піксельної сітки Scaleform.
+            line.graphics.lineStyle(1.35, CONTOUR_COLOR, 0.90, false, "normal", "round", "round");
             _traceContour(line.graphics);
             var lineBmp:BitmapData = new BitmapData(CW, CH, true, 0x00000000);
             lineBmp.draw(line);

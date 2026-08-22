@@ -1,6 +1,7 @@
 package com.inq.marks
 {
     import flash.display.CapsStyle;
+    import flash.display.DisplayObjectContainer;
     import flash.display.Graphics;
     import flash.display.GradientType;
     import flash.display.Shape;
@@ -11,6 +12,7 @@ package com.inq.marks
     import flash.filters.DropShadowFilter;
     import flash.filters.GlowFilter;
     import flash.geom.Matrix;
+    import flash.geom.Point;
     import flash.geom.Rectangle;
     import flash.text.TextField;
     import flash.text.TextFieldAutoSize;
@@ -61,7 +63,7 @@ package com.inq.marks
         private static const TITLE_FONT_FACE:String = "$TitleFont";
         private static const COLOR_LABEL:uint  = 0xFFFFFF;
         private static const COLOR_DIM:uint    = 0x98A6B3;
-        private static const COLOR_GREEN:uint  = 0xB6E86A;
+        private static const COLOR_GREEN:uint  = 0xA6E176;
         private static const COLOR_RED:uint    = 0xD64A4A;
         private static const COLOR_GOLD:uint   = 0xC8B97A;
         private static const FRAME_COLOR:uint  = 0xAEB8C2;
@@ -102,6 +104,8 @@ package com.inq.marks
         private var _shadow:DropShadowFilter;
         private var _style3Outline:Shape;
         private var _collapseBtn:Sprite;
+        private var _collapseLocalX:Number = 0.0;
+        private var _collapseLocalY:Number = 0.0;
 
         // окремі рендери для складних стилів (створюються лениво)
         private var _neerRenderer:InqMarksNeerRenderer;
@@ -120,7 +124,10 @@ package com.inq.marks
         private var _expanded:Boolean  = false;
         private var _disposed:Boolean  = false;
         private var _offset:Array      = [-1, -1];
+        private var _lastAnchorX:Number = NaN;
+        private var _lastAnchorY:Number = NaN;
         private var _dragging:Boolean  = false;
+        private var _pendingNeerRedraw:Boolean = false;
         private var _dragStartX:Number = 0.0;
         private var _dragStartY:Number = 0.0;
         private var _panelCollapsed:Boolean = false;
@@ -181,6 +188,22 @@ package com.inq.marks
 
         // ── public API ───────────────────────────────────────────────────────
 
+        public function attachCollapseOverlay(host:DisplayObjectContainer):void
+        {
+            if (_disposed || !_collapseBtn || !host) return;
+            if (_collapseBtn.parent != host) host.addChild(_collapseBtn);
+            removeEventListener(Event.ENTER_FRAME, _syncCollapseOverlay);
+            addEventListener(Event.ENTER_FRAME, _syncCollapseOverlay);
+            _syncCollapseOverlay();
+        }
+
+        public function detachCollapseOverlay():void
+        {
+            removeEventListener(Event.ENTER_FRAME, _syncCollapseOverlay);
+            if (_collapseBtn && _collapseBtn.parent && _collapseBtn.parent != this)
+                _collapseBtn.parent.removeChild(_collapseBtn);
+        }
+
         public function setExpanded(value:Boolean):void
         {
             if (_disposed) return;
@@ -215,6 +238,11 @@ package com.inq.marks
             _projectedMark = isNaN(projectedMark) ? -1.0 : projectedMark;
             _projectedAvg  = int(Math.max(0, projectedAvg));
             _starsCount    = int(Math.max(-1, Math.min(3, stars)));
+            if (_dragging && _style == STYLE_NEER)
+            {
+                _pendingNeerRedraw = true;
+                return;
+            }
             _draw();
             updatePosition();
         }
@@ -224,6 +252,11 @@ package com.inq.marks
             _currentDamage = int(Math.max(0, value));
             _projectedMark = -1.0;
             _projectedAvg  = 0;
+            if (_dragging && _style == STYLE_NEER)
+            {
+                _pendingNeerRedraw = true;
+                return;
+            }
             _draw();
         }
 
@@ -237,20 +270,64 @@ package com.inq.marks
         public function updatePosition():void
         {
             if (!stage || _dragging) return;
-            var sw:int = stage.stageWidth  > 0 ? stage.stageWidth  : 1280;
-            var sh:int = stage.stageHeight > 0 ? stage.stageHeight : 720;
+            var sw:int = App.appWidth  > 0 ? App.appWidth  : 1280;
+            var sh:int = App.appHeight > 0 ? App.appHeight : 720;
             var h:int  = _curH();
             var ww:int = _curW();
+            var collapsedHForAnchor:int = (_style == STYLE_POLAROID) ? H_HTML : H;
+            var scale:Number = App.appScale > 0 ? App.appScale : 1.0;
+            var anchorX:Number = int(sw * 0.5 + 300 / scale);
+            var anchorY:Number = int(sh - 108 / scale);
+            var previousX:int = int(_offset[0]);
+            var previousY:int = int(_offset[1]);
+
+            // Та сама модель, що у GunMarks Lebwa: позиція зберігається
+            // відносно HUD-anchor, а не відносно WINDOW-контейнера.
+            if (!isNaN(_lastAnchorX) && !isNaN(_lastAnchorY) &&
+                _offset[0] >= 0 && _offset[1] >= 0)
+            {
+                _offset[0] = int(Number(_offset[0]) + anchorX - _lastAnchorX);
+                _offset[1] = int(Number(_offset[1]) + anchorY - _lastAnchorY);
+            }
+            _lastAnchorX = anchorX;
+            _lastAnchorY = anchorY;
+
             if (_offset[0] < 0 && _offset[1] < 0)
             {
-                x = int(sw * 0.5 - ww * 0.5);
-                y = int(sh - h - 118);
+                // Автопозицію визначаємо лише один раз. Надалі fullscreen
+                // не перераховує й не масштабує координати мітки.
+                _offset[0] = int(sw * 0.5 - ww * 0.5);
+                _offset[1] = int(sh - h - 118);
             }
-            else
+
+            // Лишаємо мітку всередині робочої області.
+            var clampedX:int = int(Math.max(BATTLE_EDGE_GAP,
+                Math.min(sw - ww - BATTLE_EDGE_GAP, Number(_offset[0]))));
+            var clampedY:int = int(Math.max(BATTLE_EDGE_GAP,
+                Math.min(sh - collapsedHForAnchor - BATTLE_EDGE_GAP, Number(_offset[1]))));
+            _offset[0] = clampedX;
+            _offset[1] = clampedY;
+            if (previousX >= 0 && previousY >= 0 &&
+                (clampedX != previousX || clampedY != previousY))
             {
-                x = Math.max(BATTLE_EDGE_GAP, Math.min(sw - ww - BATTLE_EDGE_GAP,  int(_offset[0])));
-                y = Math.max(BATTLE_EDGE_GAP, Math.min(sh - h - BATTLE_EDGE_GAP,  int(_offset[1])));
+                dispatchEvent(new InqMarksPanelEvent(
+                    InqMarksPanelEvent.BATTLE_BADGE_OFFSET_CHANGED, _offset));
             }
+
+            var displayY:Number = Number(_offset[1]);
+            if (_expanded && displayY + h > sh - BATTLE_EDGE_GAP)
+            {
+                // Біля нижнього краю розгортаємо панель угору, залишаючи
+                // згорнуту частину на тому самому екранному місці.
+                displayY -= h - collapsedHForAnchor;
+            }
+            var appScale:Number = scale;
+            var localPos:Point = parent
+                ? parent.globalToLocal(new Point(Number(_offset[0]) * appScale, displayY * appScale))
+                : new Point(Number(_offset[0]), displayY);
+            x = int(localPos.x);
+            y = int(localPos.y);
+            _syncCollapseOverlay();
         }
 
         public function dispose():void
@@ -261,10 +338,13 @@ package com.inq.marks
             removeEventListener(MouseEvent.MOUSE_DOWN, _onMouseDown);
             if (_dragHit)
                 _dragHit.removeEventListener(MouseEvent.MOUSE_DOWN, _onMouseDown);
+            removeEventListener(Event.ENTER_FRAME, _syncCollapseOverlay);
             if (_collapseBtn)
             {
                 _collapseBtn.removeEventListener(MouseEvent.MOUSE_DOWN, _onCollapseMouseDown);
                 _collapseBtn.removeEventListener(MouseEvent.CLICK, _onCollapseClick);
+                if (_collapseBtn.parent && _collapseBtn.parent != this)
+                    _collapseBtn.parent.removeChild(_collapseBtn);
             }
             if (stage)
             {
@@ -298,7 +378,7 @@ package com.inq.marks
 
         private function _onKeyDown(e:KeyboardEvent):void
         {
-            if (e.keyCode == Keyboard.ALTERNATE && !_expanded)
+            if (e.keyCode == Keyboard.ALTERNATE && !_expanded && _style != STYLE_NEER)
             {
                 _expanded = true;
                 _draw();
@@ -307,13 +387,14 @@ package com.inq.marks
             if (e.keyCode == Keyboard.CONTROL)
             {
                 _controlVisible = true;
-                _drawCollapseButton();
+                if (_style == STYLE_COMPACT) _draw();
+                else _drawCollapseButton();
             }
         }
 
         private function _onKeyUp(e:KeyboardEvent):void
         {
-            if (e.keyCode == Keyboard.ALTERNATE && _expanded)
+            if (e.keyCode == Keyboard.ALTERNATE && _expanded && _style != STYLE_NEER)
             {
                 _expanded = false;
                 _draw();
@@ -322,7 +403,8 @@ package com.inq.marks
             if (e.keyCode == Keyboard.CONTROL)
             {
                 _controlVisible = false;
-                _drawCollapseButton();
+                if (_style == STYLE_COMPACT) _draw();
+                else _drawCollapseButton();
             }
         }
 
@@ -336,8 +418,8 @@ package com.inq.marks
             _dragStartY = y;
             var bounds:Rectangle = new Rectangle(
                 BATTLE_EDGE_GAP, BATTLE_EDGE_GAP,
-                Math.max(0, stage.stageWidth  - _curW() - BATTLE_EDGE_GAP * 2),
-                Math.max(0, stage.stageHeight - _curH() - BATTLE_EDGE_GAP * 2)
+                Math.max(0, App.appWidth  - _curW() - BATTLE_EDGE_GAP * 2),
+                Math.max(0, App.appHeight - _curH() - BATTLE_EDGE_GAP * 2)
             );
             startDrag(false, bounds);
             stage.addEventListener(MouseEvent.MOUSE_UP, _onMouseUp);
@@ -375,8 +457,18 @@ package com.inq.marks
                 updatePosition();
                 return;
             }
-            _offset = [int(x), int(y)];
-            dispatchEvent(new InqMarksPanelEvent(InqMarksPanelEvent.BATTLE_BADGE_OFFSET_CHANGED, _offset));
+            var globalPos:Point = parent
+                ? parent.localToGlobal(new Point(x, y))
+                : new Point(x, y);
+            var appScale:Number = App.appScale > 0 ? App.appScale : 1.0;
+            _offset = [int(globalPos.x / appScale), int(globalPos.y / appScale)];
+            dispatchEvent(new InqMarksPanelEvent(
+                InqMarksPanelEvent.BATTLE_BADGE_OFFSET_CHANGED, _offset));
+            if (_pendingNeerRedraw && _style == STYLE_NEER)
+            {
+                _pendingNeerRedraw = false;
+                _draw();
+            }
         }
 
         private function _onCollapseMouseDown(e:MouseEvent):void
@@ -399,8 +491,12 @@ package com.inq.marks
         {
             var isPolaroid:Boolean = (_style == STYLE_POLAROID);
             // Стилі можуть використовувати ці поля з різною прозорістю.
+            _total.alpha = 1.0;
             _targetLabel.alpha = 1.0;
+            _targetDmg.alpha = 1.0;
             _htmlSumTarget.alpha = 1.0;
+            _htmlTempoValue1.alpha = 1.0;
+            _htmlTempoValue2.alpha = 1.0;
             _setPanelContentVisible(true);
             _setTextFilters(isPolaroid);
             // HTML-асети (рамка/фон) — ТІЛЬКИ для polaroid, не для neer
@@ -437,6 +533,7 @@ package com.inq.marks
 
             var g:Graphics = _bg.graphics;
             g.clear();
+
             g.lineStyle(0, 0x000000, 0.0);
             g.beginFill(0x05080C, 0.001);
             g.drawRoundRect(0, 0, W, h, 4, 4);
@@ -534,7 +631,7 @@ package com.inq.marks
 
         // ── compact style (зірки+смужки зліва, як на макеті) ─────────────────
         private static const COMPACT_DIM_WHITE:uint = 0xCED6DE;
-        private static const COMPACT_GREEN:uint = 0x8FEC55;
+        private static const COMPACT_GREEN:uint = 0xA6E176;
 
         private function _drawHtmlStyle():void
         {
@@ -590,7 +687,7 @@ package com.inq.marks
             for (i = 0; i < 3; i++)
             {
                 sg.lineStyle(1.0, FRAME_COLOR, 0.55, true);
-                sg.beginFill(i < filled ? 0xFFFFFF : 0x27313C, 1.0);
+                sg.beginFill(0xFFFFFF, i < filled ? 1.0 : 0.0);
                 _starPath(sg, 81 + i * 19, 2, 7, 3.0);
                 sg.endFill();
             }
@@ -602,7 +699,8 @@ package com.inq.marks
                 ((delta > 0 ? "+" : "-") + _fmt2(Math.abs(delta)) + "%");
             if (deltaStr.length > 0)
             {
-                _delta.htmlText = _fmt(deltaStr, 16, COLOR_DIM);
+                _delta.htmlText = _fmt(deltaStr, 16, 0xFFFFFF);
+                _delta.alpha = 0.70;
                 _delta.y = 23;
                 _delta.visible = true;
             }
@@ -611,7 +709,7 @@ package com.inq.marks
                 _delta.visible = false;
             }
             // Оригінал центрує весь блок: відсоток + стрілка + дельта.
-            var arrowW:Number = kind == 0 ? 0 : 7;
+            var arrowW:Number = kind == 0 ? 0 : 8;
             var deltaW:Number = _delta.visible ? _delta.width : 0;
             var blockW:Number = _value.width + (kind == 0 ? 0 : (10 + arrowW + 5 + deltaW));
             var blockX:Number = int((W_HTML - blockW) / 2) + 5;
@@ -634,7 +732,8 @@ package com.inq.marks
             _drawStyle3DetailLine(_expanded);
 
             var currentColor:uint = kind > 0 ? HTML_GREEN : (kind < 0 ? (_currentDamage < 0 ? 0x9F84D6 : HTML_RED) : COLOR_LABEL);
-            _total.htmlText = _fmt(_strSumLabel(), 14, COLOR_DIM);
+            _total.htmlText = _fmt(_strSumLabel(), 14, 0xFFFFFF);
+            _total.alpha = 0.70;
             _total.x = 24;
             _total.y = 72;
             _total.visible = true;
@@ -644,6 +743,7 @@ package com.inq.marks
             _htmlSumValue.visible = true;
 
             _htmlSumTarget.htmlText = _fmt(" / " + (target > 0 ? _fmtNum(target) : "N/A"), 14, COLOR_LABEL);
+            _htmlSumTarget.alpha = 1.0;
             _htmlSumTarget.x = int(24 + 150 - _htmlSumTarget.width);
             _htmlSumTarget.y = 72;
             _htmlSumTarget.visible = true;
@@ -657,21 +757,25 @@ package com.inq.marks
                 var tempoPct:int = projMark > 0 ? int(Math.ceil(projMark)) : 55;
                 if (tempoPct < 55) tempoPct = 55;
                 _targetLabel.htmlText =
-                    _fmt("\u0422\u0435\u043c\u043f \u0434\u043b\u044f " + tempoPct.toString() + "%", 14, COLOR_DIM);
+                    _fmt("\u0422\u0435\u043c\u043f \u0434\u043b\u044f " + tempoPct.toString() + "%", 14, 0xFFFFFF);
+                _targetLabel.alpha = 0.70;
                 _targetLabel.x = 24;
                 _targetLabel.y = 105;
                 _targetLabel.visible = true;
                 _htmlTempoValue1.htmlText = _fmt(target > 0 ? _fmtNum(target) : "N/A", 14, COLOR_LABEL);
+                _htmlTempoValue1.alpha = 1.0;
                 _htmlTempoValue1.x = int(175 - _htmlTempoValue1.width);
                 _htmlTempoValue1.y = 105;
                 _htmlTempoValue1.visible = true;
 
                 _targetDmg.htmlText =
-                    _fmt("\u0422\u0435\u043c\u043f \u0434\u043b\u044f " + milestonePct.toFixed(0) + "%", 14, COLOR_DIM);
+                    _fmt("\u0422\u0435\u043c\u043f \u0434\u043b\u044f " + milestonePct.toFixed(0) + "%", 14, 0xFFFFFF);
+                _targetDmg.alpha = 0.70;
                 _targetDmg.x = 24;
                 _targetDmg.y = 127;
                 _targetDmg.visible = true;
                 _htmlTempoValue2.htmlText = _fmt(milestoneDmg > 0 ? _fmtNum(milestoneDmg) : "N/A", 14, COLOR_LABEL);
+                _htmlTempoValue2.alpha = 1.0;
                 _htmlTempoValue2.x = int(175 - _htmlTempoValue2.width);
                 _htmlTempoValue2.y = 127;
                 _htmlTempoValue2.visible = true;
@@ -698,28 +802,46 @@ package com.inq.marks
             var topSeg:Number = 58;
             var sGap:Number = 5;
             var barY:Number = 58;
-            var connLen:Number = 14;
-            var connCapH:Number = 22;
-            // кути — товщі в 2 рази
-            g.lineStyle(2.1, HTML_FRAME_LIGHT, 0.37, true);
+            var barLeft:Number = 24;
+            var barRight:Number = 174;
+            var sideInset:Number = 3;
+            var lineCutStart:Number = 8;
+            var lineCutEnd:Number = 14;
+            var barGap:Number = 4;
+            var sideCutTop:Number = 14;
+            var sideCutBottom:Number = 10;
+            var sideCutSize:Number = 4;
+            var frameThickness:Number = 1.5;
+            var frameAlpha:Number = 0.37;
+            var frameColor:uint = HTML_FRAME_COLOR;
+
+            // Єдиний колір, товщина та альфа по всьому периметру.
+            g.lineStyle(frameThickness, frameColor, frameAlpha, true);
             _style3Corner(g, x, y, r, 0);
             _style3Corner(g, x + w, y, r, 1);
             _style3Corner(g, x, y + h, r, 2);
             _style3Corner(g, x + w, y + h, r, 3);
-            // прямі лінії обводки — товщі в 1.5 раза
-            g.lineStyle(1.575, HTML_FRAME_LIGHT, 0.37, true);
+
             g.moveTo(x + r + sGap, y);       g.lineTo(x + topSeg, y);
             g.moveTo(x + w - topSeg, y);     g.lineTo(x + w - r - sGap, y);
-            g.lineStyle(1.575, HTML_FRAME_MID, 0.37, true);
             g.moveTo(x + r + sGap, y + h);   g.lineTo(x + w - r - sGap, y + h);
-            g.moveTo(x, y + r + sGap);       g.lineTo(x, y + h - r - sGap);
-            g.moveTo(x + w, y + r + sGap);   g.lineTo(x + w, y + h - r - sGap);
 
-            g.lineStyle(1.5, HTML_FRAME_DARK, 0.37, true);
-            g.moveTo(x, barY - connCapH / 2);     g.lineTo(x, barY + connCapH / 2);
-            g.moveTo(x, barY);                     g.lineTo(x + connLen, barY);
-            g.moveTo(x + w, barY - connCapH / 2); g.lineTo(x + w, barY + connCapH / 2);
-            g.moveTo(x + w, barY);                 g.lineTo(x + w - connLen, barY);
+            // Повертаємо два вертикальні розрізи — над і під центральним
+            // відрізком. Горизонтальна лінія починається з inset, тому штрихи
+            // не накладаються один на одного і боки не стають світлішими.
+            g.moveTo(x, y + r + sGap); g.lineTo(x, barY - sideCutTop);
+            g.moveTo(x, barY - sideCutTop + sideCutSize); g.lineTo(x, barY + sideCutBottom);
+            g.moveTo(x, barY + sideCutBottom + sideCutSize); g.lineTo(x, y + h - r - sGap);
+            g.moveTo(x + w, y + r + sGap); g.lineTo(x + w, barY - sideCutTop);
+            g.moveTo(x + w, barY - sideCutTop + sideCutSize); g.lineTo(x + w, barY + sideCutBottom);
+            g.moveTo(x + w, barY + sideCutBottom + sideCutSize); g.lineTo(x + w, y + h - r - sGap);
+
+            // Бокові горизонтальні лінії мають по одному короткому вирізу та
+            // окремий відступ перед прогрес-баром — до заливки вони не торкаються.
+            g.moveTo(x + sideInset, barY);        g.lineTo(x + lineCutStart, barY);
+            g.moveTo(x + lineCutEnd, barY);       g.lineTo(barLeft - barGap, barY);
+            g.moveTo(x + w - sideInset, barY);    g.lineTo(x + w - lineCutStart, barY);
+            g.moveTo(x + w - lineCutEnd, barY);   g.lineTo(barRight + barGap, barY);
             g.lineStyle(NaN);
         }
 
@@ -774,41 +896,65 @@ package com.inq.marks
             g.clear();
             if (!_collapseBtn.visible) return;
 
-            // позиція справа від панелі поточного стилю, на однаковій відстані
+            // Тримаємо кнопку на її початковому зовнішньому місці біля панелі.
             var panelW:Number = _curW();
+            var s:Number = 21;
             var bx:Number = panelW + 12;
             var by:Number = 3;
             if (_style == STYLE_NEER)
             {
-                // Видимий Neer закінчується біля x=339, а не на краю canvas 402.
                 bx = 347;
                 by = 58;
             }
             else if (_style == STYLE_MINIMAL)
             {
-                // Minimal займає лише центральні ~180 px технічного контейнера.
                 bx = 190;
                 by = 32;
             }
-            var s:Number = 19;
-            _collapseBtn.x = bx;
-            _collapseBtn.y = by;
+            _collapseLocalX = bx;
+            _collapseLocalY = by;
+            _syncCollapseOverlay();
 
             g.beginFill(0x141A22, 0.50);
             g.drawRoundRect(0, 0, s, s, 8, 8);
             g.endFill();
-            g.lineStyle(1.0, HTML_FRAME_COLOR, 0.45, true);
-            g.drawRoundRect(0.5, 0.5, s - 1, s - 1, 7, 7);
+            // Тримаємо stroke повністю всередині кнопки: на дробових UI-scale
+            // Scaleform більше не підрізає зовнішній край рамки кнопки.
+            g.lineStyle(1.0, HTML_FRAME_COLOR, 0.45, false);
+            g.drawRoundRect(1.0, 1.0, s - 2.0, s - 2.0, 6.5, 6.5);
 
-            g.lineStyle(1.5, COLOR_LABEL, 1.0, true);
-            g.moveTo(5, s * 0.5);
-            g.lineTo(s - 5, s * 0.5);
+            // Символи малюємо симетрично від центра з нормальним внутрішнім padding.
+            var c:Number = s * 0.5;
+            var arm:Number = 5.0;
+            g.lineStyle(1.5, COLOR_LABEL, 1.0, false, "normal", "round");
+            g.moveTo(c - arm, c);
+            g.lineTo(c + arm, c);
             if (_panelCollapsed)
             {
-                g.moveTo(s * 0.5, 5);
-                g.lineTo(s * 0.5, s - 5);
+                g.moveTo(c, c - arm);
+                g.lineTo(c, c + arm);
             }
             g.lineStyle(NaN);
+        }
+
+        private function _syncCollapseOverlay(event:Event = null):void
+        {
+            if (!_collapseBtn) return;
+            _collapseBtn.visible = visible && _controlVisible;
+            if (!_collapseBtn.visible) return;
+
+            if (_collapseBtn.parent == this)
+            {
+                _collapseBtn.x = _collapseLocalX;
+                _collapseBtn.y = _collapseLocalY;
+                return;
+            }
+            if (!_collapseBtn.parent || !stage) return;
+
+            var globalPos:Point = localToGlobal(new Point(_collapseLocalX, _collapseLocalY));
+            var overlayPos:Point = _collapseBtn.parent.globalToLocal(globalPos);
+            _collapseBtn.x = Math.round(overlayPos.x);
+            _collapseBtn.y = Math.round(overlayPos.y);
         }
 
         private function _redrawDragHit():void
@@ -857,11 +1003,26 @@ package com.inq.marks
             var h:int = _expanded ? H_EXP : H;
             var g:Graphics = _bg.graphics;
             g.clear();
-            // без рамки — тільки підтемнення фону, щоб текст не губився
+
+            // без рамки — тільки легке підтемнення безпосередньо під контентом
             g.lineStyle(NaN);
             g.beginFill(0x0A0E14, 0.07);
             g.drawRoundRect(0, 0, W, h, 8, 8);
             g.endFill();
+
+            // Ctrl: показує точні межі Compact для позиціонування.
+            if (_style3Outline)
+            {
+                var cg:Graphics = _style3Outline.graphics;
+                cg.clear();
+                if (_controlVisible)
+                {
+                    // Рівна 1 px рамка точно по hitbox Compact.
+                    cg.lineStyle(1.0, 0xFFFFFF, 0.65, true);
+                    cg.drawRect(0.5, 0.5, W - 1.0, h - 1.0);
+                    cg.lineStyle(NaN);
+                }
+            }
 
             // обчислення (ті самі, що в classic)
             var current:int     = _currentDamage >= 0 ? _currentDamage : 0;
@@ -1125,6 +1286,32 @@ package com.inq.marks
             var col:uint = (_style == STYLE_POLAROID || _style == STYLE_COMPACT)
                 ? (kind > 0 ? (_style == STYLE_COMPACT ? COMPACT_GREEN : HTML_GREEN) : HTML_ARROW_RED)
                 : (kind > 0 ? ARROW_UP : ARROW_DOWN);
+            if (_style == STYLE_POLAROID)
+            {
+                // Цільна симетрична геометрія без дробових координат:
+                // не викривляється після масштабування Scaleform.
+                cx = Math.round(cx);
+                cy = Math.round(cy);
+                g.beginFill(col, 1.0);
+                if (kind > 0)
+                {
+                    g.drawRect(cx - 1, cy - 4, 2, 11);
+                    g.moveTo(cx, cy - 8);
+                    g.lineTo(cx - 4, cy - 3);
+                    g.lineTo(cx + 4, cy - 3);
+                    g.lineTo(cx, cy - 8);
+                }
+                else
+                {
+                    g.drawRect(cx - 1, cy - 7, 2, 11);
+                    g.moveTo(cx, cy + 8);
+                    g.lineTo(cx - 4, cy + 3);
+                    g.lineTo(cx + 4, cy + 3);
+                    g.lineTo(cx, cy + 8);
+                }
+                g.endFill();
+                return;
+            }
             var sz:Number = 7;
             g.lineStyle(1.8, col, 1.0, true, "normal", CapsStyle.ROUND);
             if (kind > 0)
@@ -1234,31 +1421,9 @@ package com.inq.marks
             var color:uint = delta > 0.005 ? HTML_GREEN :
                              (delta < -0.005 ? HTML_BAR_RED : COLOR_LABEL);
             var top:Number = yPos - barH / 2;
-            var sideH:Number = 18.0;
-            var smallH:Number = 8.0;
-            var connectorGap:Number = 2.0;
-            var frameSideTicks:Boolean = !isNaN(sideLeft) && !isNaN(sideRight);
-            if (isNaN(sideLeft)) sideLeft = x0 - 9.0;
-            if (isNaN(sideRight)) sideRight = x0 + w + 9.0;
-
-            g.lineStyle(1.0, HTML_FRAME_COLOR, 0.48, true);
-            g.moveTo(sideLeft + connectorGap, yPos);
-            g.lineTo(x0 - connectorGap, yPos);
-            g.moveTo(sideLeft, yPos - sideH * 0.5);
-            g.lineTo(sideLeft, yPos + sideH * 0.5);
-            g.moveTo(x0 + w + connectorGap, yPos);
-            g.lineTo(sideRight - connectorGap, yPos);
-            g.moveTo(sideRight, yPos - sideH * 0.5);
-            g.lineTo(sideRight, yPos + sideH * 0.5);
-
-            if (frameSideTicks)
-            {
-                g.lineStyle(1.0, HTML_FRAME_COLOR, 0.42, true);
-                g.moveTo(x0, yPos - smallH * 0.5);
-                g.lineTo(x0, yPos + smallH * 0.5);
-                g.moveTo(x0 + w, yPos - smallH * 0.5);
-                g.lineTo(x0 + w, yPos + smallH * 0.5);
-            }
+            // Бокові конектори є частиною _drawStyle3BattleOutline(). Тут їх
+            // не дублюємо: другий суцільний штрих перекривав розрізи рамки й
+            // створював світлі накладання на боках.
 
             // Повний тонкий трек без прямокутної заливки. Кольорова смуга
             // перекриває його до маркера, після маркера лінія лишається видимою.

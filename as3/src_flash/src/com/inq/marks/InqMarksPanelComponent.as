@@ -125,6 +125,7 @@ package com.inq.marks
         private var _lastMarkDelta:Number = NaN;
         private var _markStars:int = -1;
         private var _markBadgeOffset:Array = [0, 0];
+        private var _markBadgeDisplayOffset:Array = [0, 0];
         private var _markBadgeOffsetSet:Boolean = false;
         private var _hasMoe:Boolean      = false;
         private var _hasGraph:Boolean    = false;
@@ -332,6 +333,9 @@ package com.inq.marks
         {
             if (_disposed) return;
             _syncPosition();
+            // Badge живе безпосередньо в Injector, тому після зміни Stage
+            // його локальні координати треба перерахувати окремо.
+            _layoutMarkBadge();
         }
 
         public function dispose():void
@@ -916,8 +920,9 @@ package com.inq.marks
                 var defaultLocalX:Number = _panelWidth + MARK_BADGE_GAP + MARK_BADGE_BTN_W;
                 var defaultLocalY:Number = 0;
                 var globalDefault:Point = this.localToGlobal(new Point(defaultLocalX, defaultLocalY));
-                _markBadgeOffset[0] = int(globalDefault.x);
-                _markBadgeOffset[1] = int(globalDefault.y);
+                var appScale:Number = App.appScale > 0 ? App.appScale : 1.0;
+                _markBadgeOffset[0] = int(globalDefault.x / appScale);
+                _markBadgeOffset[1] = int(globalDefault.y / appScale);
                 _markBadgeOffsetSet = true;
             }
             _clampMarkBadgeOffset();
@@ -925,7 +930,9 @@ package com.inq.marks
             // не this — тому використовуємо parent.globalToLocal.
             // Це означає що переміщення this не впливає на badge.x/y
             var targetContainer:DisplayObjectContainer = (_markBadge.parent != null) ? _markBadge.parent : this;
-            var localBadge:Point = targetContainer.globalToLocal(new Point(_markBadgeOffset[0], _markBadgeOffset[1]));
+            appScale = App.appScale > 0 ? App.appScale : 1.0;
+            var localBadge:Point = targetContainer.globalToLocal(
+                new Point(_markBadgeDisplayOffset[0] * appScale, _markBadgeDisplayOffset[1] * appScale));
             _markBadge.x = int(localBadge.x);
             _markBadge.y = int(localBadge.y);
             if (_markBadgeBtn)
@@ -944,9 +951,10 @@ package com.inq.marks
             var btnGlobal:Point;
             if (_markBadgeOpen)
             {
+                var appScale:Number = App.appScale > 0 ? App.appScale : 1.0;
                 btnGlobal = new Point(
-                    _markBadgeOffset[0] - MARK_BADGE_BTN_W - 3,
-                    _markBadgeOffset[1] + int((_mbCurH() - MARK_BADGE_BTN_H) * 0.5)
+                    (_markBadgeDisplayOffset[0] - MARK_BADGE_BTN_W - 3) * appScale,
+                    (_markBadgeDisplayOffset[1] + int((_mbCurH() - MARK_BADGE_BTN_H) * 0.5)) * appScale
                 );
             }
             else
@@ -1614,21 +1622,32 @@ package com.inq.marks
 
         private function _clampMarkBadgeOffset():void
         {
+            _markBadgeDisplayOffset[0] = _markBadgeOffset[0];
+            _markBadgeDisplayOffset[1] = _markBadgeOffset[1];
             if (!stage) return;
             // Не клампаємо якщо stage ще не готовий
-            if (stage.stageWidth <= 0 || stage.stageHeight <= 0) return;
+            if (App.appWidth <= 0 || App.appHeight <= 0) return;
             var badgeH:int = _mbCurH();
             // Координати offset глобальні — клампаємо відносно stage
             var minX:Number = BOUNDARY_GAP;
             var minY:Number = BOUNDARY_GAP;
-            var maxX:Number = stage.stageWidth  - BOUNDARY_GAP - _mbW();
-            var maxY:Number = stage.stageHeight - BOUNDARY_GAP - badgeH;
+            var maxX:Number = App.appWidth  - BOUNDARY_GAP - _mbW();
+            var maxY:Number = App.appHeight - BOUNDARY_GAP - badgeH;
             if (maxX < minX) maxX = minX;
             if (maxY < minY) maxY = minY;
-            if (_markBadgeOffset[0] < minX) _markBadgeOffset[0] = minX;
-            if (_markBadgeOffset[0] > maxX) _markBadgeOffset[0] = maxX;
-            if (_markBadgeOffset[1] < minY) _markBadgeOffset[1] = minY;
-            if (_markBadgeOffset[1] > maxY) _markBadgeOffset[1] = maxY;
+            // Якщо робоча область стала меншою, фіксуємо найближчу допустиму
+            // позицію. Тоді повернення у fullscreen не відновить старий Y.
+            _markBadgeDisplayOffset[0] = Math.max(minX, Math.min(maxX, Number(_markBadgeOffset[0])));
+            _markBadgeDisplayOffset[1] = Math.max(minY, Math.min(maxY, Number(_markBadgeOffset[1])));
+            if (!_isBadgeDragging &&
+                (_markBadgeDisplayOffset[0] != Number(_markBadgeOffset[0]) ||
+                 _markBadgeDisplayOffset[1] != Number(_markBadgeOffset[1])))
+            {
+                _markBadgeOffset[0] = int(_markBadgeDisplayOffset[0]);
+                _markBadgeOffset[1] = int(_markBadgeDisplayOffset[1]);
+                dispatchEvent(new InqMarksPanelEvent(
+                    InqMarksPanelEvent.MARK_BADGE_OFFSET_CHANGED, _markBadgeOffset));
+            }
         }
 
         private function _drawBadgeStars():void
@@ -1840,6 +1859,7 @@ package com.inq.marks
                     parent.addChild(_markBadgeBtn);
                 }
             }
+            _layoutMarkBadge();
         }
 
         private function _onKeyDown(e:KeyboardEvent):void
@@ -1874,8 +1894,8 @@ package com.inq.marks
             _badgeClickPoint.x = stage.mouseX;
             _badgeClickPoint.y = stage.mouseY;
             // offset зберігається в глобальних координатах
-            _badgeDragOffset.x = _markBadgeOffset[0] - stage.mouseX;
-            _badgeDragOffset.y = _markBadgeOffset[1] - stage.mouseY;
+            _badgeDragOffset.x = _markBadgeDisplayOffset[0] - stage.mouseX;
+            _badgeDragOffset.y = _markBadgeDisplayOffset[1] - stage.mouseY;
             stage.addEventListener(MouseEvent.MOUSE_MOVE, _onMarkBadgeMouseMove);
             stage.addEventListener(MouseEvent.MOUSE_UP, _onMarkBadgeMouseUp);
         }
@@ -1997,8 +2017,12 @@ package com.inq.marks
             }
             _clickPoint.x  = stage.mouseX;
             _clickPoint.y  = stage.mouseY;
-            _clickOffset.x = this.x - _clickPoint.x;
-            _clickOffset.y = this.y - _clickPoint.y;
+            var panelGlobal:Point = parent != null
+                ? parent.localToGlobal(new Point(this.x, this.y))
+                : new Point(this.x, this.y);
+            var appScale:Number = App.appScale > 0 ? App.appScale : 1.0;
+            _clickOffset.x = panelGlobal.x / appScale - _clickPoint.x;
+            _clickOffset.y = panelGlobal.y / appScale - _clickPoint.y;
             _isDragTest = true;
             _clearDragTimeout();
             _dragTimeout = setTimeout(_beginDrag, DRAG_DELAY);
@@ -2029,8 +2053,11 @@ package com.inq.marks
             if (_isDragging)
             {
                 _clampToScreen(_clickOffset.x + stage.mouseX, _clickOffset.y + stage.mouseY);
-                this.x = _reusablePoint.x;
-                this.y = _reusablePoint.y;
+                var localPos:Point = parent != null
+                    ? parent.globalToLocal(new Point(_reusablePoint.x, _reusablePoint.y))
+                    : new Point(_reusablePoint.x, _reusablePoint.y);
+                this.x = localPos.x;
+                this.y = localPos.y;
                 // Кнопка "<"/">" живе в injector-шарі. У згорнутому стані вона
                 // має триматись біля панелі (яку тягнемо), тож перераховуємо її
                 // позицію на кожному кроці драгу. У відкритому стані вона
@@ -2046,8 +2073,12 @@ package com.inq.marks
             _clearDragTimeout();
             if (_isDragging)
             {
-                _offset[0] = int(this.x);
-                _offset[1] = int(this.y);
+                var globalPos:Point = parent != null
+                    ? parent.localToGlobal(new Point(this.x, this.y))
+                    : new Point(this.x, this.y);
+                var appScale:Number = App.appScale > 0 ? App.appScale : 1.0;
+                _offset[0] = int(globalPos.x / appScale);
+                _offset[1] = int(globalPos.y / appScale);
                 dispatchEvent(new InqMarksPanelEvent(InqMarksPanelEvent.OFFSET_CHANGED, _offset));
             }
             _isDragTest = false;
@@ -2057,8 +2088,8 @@ package com.inq.marks
 
         private function _clampToScreen(px:Number, py:Number):void
         {
-            var sw:int = (stage != null && stage.stageWidth  > 0) ? stage.stageWidth  : 1920;
-            var sh:int = (stage != null && stage.stageHeight > 0) ? stage.stageHeight : 1080;
+            var sw:int = App.appWidth  > 0 ? App.appWidth  : 1920;
+            var sh:int = App.appHeight > 0 ? App.appHeight : 1080;
             var totalW:int = _panelWidth + (_markBadgeOpen ? (MARK_BADGE_BTN_W + MARK_BADGE_GAP + _mbW()) : MARK_BADGE_BTN_W);
             _reusablePoint.x = int(Math.max(BOUNDARY_GAP, Math.min(sw - totalW - BOUNDARY_GAP, px)));
             _reusablePoint.y = int(Math.max(BOUNDARY_GAP, Math.min(sh - _panelHeight - BOUNDARY_GAP, py)));
@@ -2068,8 +2099,20 @@ package com.inq.marks
         {
             if (_isDragging || _disposed) return;
             _clampToScreen(_offset[0], _offset[1]);
-            this.x = _reusablePoint.x;
-            this.y = _reusablePoint.y;
+            if (_reusablePoint.x != Number(_offset[0]) ||
+                _reusablePoint.y != Number(_offset[1]))
+            {
+                _offset[0] = int(_reusablePoint.x);
+                _offset[1] = int(_reusablePoint.y);
+                dispatchEvent(new InqMarksPanelEvent(
+                    InqMarksPanelEvent.OFFSET_CHANGED, _offset));
+            }
+            var appScale:Number = App.appScale > 0 ? App.appScale : 1.0;
+            var localPos:Point = parent != null
+                ? parent.globalToLocal(new Point(_reusablePoint.x * appScale, _reusablePoint.y * appScale))
+                : new Point(_reusablePoint.x, _reusablePoint.y);
+            this.x = int(localPos.x);
+            this.y = int(localPos.y);
         }
 
         private function _createRowFields(count:int, autoSize:String, fontSize:int):Array

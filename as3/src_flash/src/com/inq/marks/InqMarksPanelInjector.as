@@ -6,7 +6,7 @@ package com.inq.marks
     public class InqMarksPanelInjector extends AbstractView
     {
         private var _panel:InqMarksPanelComponent = null;
-        private var _battleBadge:InqMarksBattleMarkBadge = null;
+        protected var _battleBadge:InqMarksBattleMarkBadge = null;
 
         public var py_onDragEnd:Function = null;
         public var py_onPanelReady:Function = null;
@@ -29,8 +29,6 @@ package com.inq.marks
             _createPanel();
             _configDone = true;
             _replayPendingCalls();
-            if (App.instance && App.instance.stage)
-                App.instance.stage.addEventListener(Event.RESIZE, _onResize);
             _notifyFrameCount = 0;
             addEventListener(Event.ENTER_FRAME, _onNotifyFrame);
         }
@@ -44,8 +42,6 @@ package com.inq.marks
         override protected function onDispose():void
         {
             removeEventListener(Event.ENTER_FRAME, _onNotifyFrame);
-            if (App.instance && App.instance.stage)
-                App.instance.stage.removeEventListener(Event.RESIZE, _onResize);
             _destroyPanel();
             _pendingCalls = [];
             py_onDragEnd = null;
@@ -66,8 +62,12 @@ package com.inq.marks
                 py_onPanelReady();
         }
 
-        private function _onResize(event:Event):void
+        override public function updateStage(width:Number, height:Number):void
         {
+            // ContainerManager викликає updateStage після оновлення масштабу
+            // та геометрії контейнерів. Звичайний Stage RESIZE приходив раніше
+            // і саме тому панель спочатку стрибала, а потім поверталася.
+            super.updateStage(width, height);
             if (_panel) _panel.updatePosition();
             if (_battleBadge) _battleBadge.updatePosition();
         }
@@ -87,8 +87,24 @@ package com.inq.marks
                 InqMarksPanelEvent.BATTLE_BADGE_OFFSET_CHANGED,
                 _onBattleBadgeOffsetChanged);
             _battleBadge.visible = false;
-            addChild(_battleBadge);
+            if (attachBattleBadge())
+            {
+                // У бою badge живе у BaseBattlePage, як штатні HUD-компоненти.
+            }
+            else
+            {
+                addChild(_battleBadge);
+            }
             _battleBadge.updatePosition();
+        }
+
+        protected function attachBattleBadge():Boolean
+        {
+            return false;
+        }
+
+        protected function detachBattleBadge():void
+        {
         }
 
         private function _destroyPanel():void
@@ -106,6 +122,7 @@ package com.inq.marks
             }
             if (_battleBadge)
             {
+                detachBattleBadge();
                 _battleBadge.removeEventListener(
                     InqMarksPanelEvent.BATTLE_BADGE_OFFSET_CHANGED,
                     _onBattleBadgeOffsetChanged);
