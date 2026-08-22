@@ -1,19 +1,25 @@
 package com.inq.marks
 {
+    import flash.display.GradientType;
     import flash.display.Graphics;
     import flash.display.Shape;
     import flash.display.Sprite;
     import flash.display.Stage;
     import flash.events.Event;
     import flash.events.KeyboardEvent;
+    import flash.events.MouseEvent;
+    import flash.geom.Matrix;
     import flash.text.TextField;
     import flash.text.TextFieldAutoSize;
     import flash.text.TextFormat;
     import flash.ui.Keyboard;
 
     /**
-     * NEER battle renderer with an Alt-only "damage to zero" progress bar.
+     * NEER battle renderer with a bottom "damage to zero" progress panel.
      * Example: 0/1900, where 1900 is baseDamage (damage needed for delta ~= 0).
+     *
+     * The panel can be toggled with a short click on the NEER mark.
+     * Alt still works as a temporary reveal for backwards compatibility.
      */
     public class InqMarksNeerBadgeRenderer extends InqMarksBattleRendererBase
     {
@@ -24,6 +30,7 @@ package com.inq.marks
         private static const GOLD:uint = 0xEAD7B7;
         private static const GREEN:uint = 0x018644;
         private static const RED:uint = 0xC51917;
+        private static const CLICK_THRESHOLD:Number = 6.0;
 
         private var _zeroLayer:Sprite;
         private var _zeroBar:Shape;
@@ -31,6 +38,9 @@ package com.inq.marks
         private var _currentDamage:int = 0;
         private var _zeroDamage:int = 0;
         private var _altExpanded:Boolean = false;
+        private var _clickExpanded:Boolean = false;
+        private var _clickStartX:Number = 0.0;
+        private var _clickStartY:Number = 0.0;
         private var _disposedLocal:Boolean = false;
         private var _eventStage:Stage = null;
 
@@ -62,6 +72,8 @@ package com.inq.marks
 
             addEventListener(Event.ADDED_TO_STAGE, _onLocalAdded);
             addEventListener(Event.REMOVED_FROM_STAGE, _onLocalRemoved);
+            addEventListener(MouseEvent.MOUSE_DOWN, _onLocalMouseDown);
+            addEventListener(MouseEvent.CLICK, _onLocalClick);
             _drawZeroProgress();
         }
 
@@ -97,6 +109,8 @@ package com.inq.marks
             _removeStageListeners();
             removeEventListener(Event.ADDED_TO_STAGE, _onLocalAdded);
             removeEventListener(Event.REMOVED_FROM_STAGE, _onLocalRemoved);
+            removeEventListener(MouseEvent.MOUSE_DOWN, _onLocalMouseDown);
+            removeEventListener(MouseEvent.CLICK, _onLocalClick);
             super.dispose();
         }
 
@@ -138,10 +152,30 @@ package com.inq.marks
             _updateZeroVisibility();
         }
 
+        private function _onLocalMouseDown(e:MouseEvent):void
+        {
+            _clickStartX = e.stageX;
+            _clickStartY = e.stageY;
+        }
+
+        private function _onLocalClick(e:MouseEvent):void
+        {
+            if (_disposedLocal) return;
+
+            // Do not toggle the panel after dragging the mark.
+            var dx:Number = e.stageX - _clickStartX;
+            var dy:Number = e.stageY - _clickStartY;
+            if (dx * dx + dy * dy > CLICK_THRESHOLD * CLICK_THRESHOLD)
+                return;
+
+            _clickExpanded = !_clickExpanded;
+            _updateZeroVisibility();
+        }
+
         private function _updateZeroVisibility():void
         {
             if (_zeroLayer)
-                _zeroLayer.visible = _altExpanded;
+                _zeroLayer.visible = _clickExpanded || _altExpanded;
         }
 
         private function _drawZeroProgress():void
@@ -173,10 +207,19 @@ package com.inq.marks
 
             if (pct > 0.0)
             {
+                var fillW:Number = Math.max(1.0, (BAR_W - 1.0) * pct);
+                var fillY:Number = BAR_Y - BAR_H * 0.5 + 0.5;
+                var fillH:Number = BAR_H - 1.0;
+                var m:Matrix = new Matrix();
+                m.createGradientBox(fillW, fillH, 0.0, BAR_X + 0.5, fillY);
+
+                // Same NEER red/green palette, but with alpha growing toward current value.
                 g.lineStyle();
-                g.beginFill(fillColor, 1.0);
-                g.drawRect(BAR_X + 0.5, BAR_Y - BAR_H * 0.5 + 0.5,
-                           Math.max(1.0, (BAR_W - 1.0) * pct), BAR_H - 1.0);
+                g.beginGradientFill(GradientType.LINEAR,
+                                    [fillColor, fillColor],
+                                    [0.22, 0.95],
+                                    [0, 255], m);
+                g.drawRect(BAR_X + 0.5, fillY, fillW, fillH);
                 g.endFill();
             }
 
@@ -186,11 +229,22 @@ package com.inq.marks
             g.lineTo(mx, BAR_Y + 5);
             g.lineStyle();
 
-            _zeroText.text = _currentDamage.toString() + "/" +
-                             (_zeroDamage > 0 ? _zeroDamage.toString() : "0");
+            // Current value (the number before "/") uses the same NEER state colour.
+            _zeroText.htmlText =
+                "<font color=\"#" + _hex6(fillColor) + "\">" + _currentDamage.toString() + "</font>" +
+                "<font color=\"#EAD7B7\">/" +
+                (_zeroDamage > 0 ? _zeroDamage.toString() : "0") + "</font>";
+            _zeroText.alpha = 0.95;
             _zeroText.x = BAR_X + BAR_W * 0.5 - _zeroText.width * 0.5;
             _zeroText.y = BAR_Y + 7;
             _updateZeroVisibility();
+        }
+
+        private function _hex6(value:uint):String
+        {
+            var s:String = value.toString(16).toUpperCase();
+            while (s.length < 6) s = "0" + s;
+            return s;
         }
     }
 }
