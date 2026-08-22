@@ -1,0 +1,11 @@
+{
+  "software": {
+    "python": "C:/Python27/python.exe"
+  },
+  "info": {
+    "id": "com.inq.marks",
+    "name": "INQ Marks",
+    "description": "INQ Marks of Excellence progress mod",
+    "version": "0.1.0"
+  }
+}
