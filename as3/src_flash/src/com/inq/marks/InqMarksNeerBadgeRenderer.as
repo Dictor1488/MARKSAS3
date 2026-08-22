@@ -12,9 +12,11 @@ package com.inq.marks
         private static const GREEN:uint = 0x018644;
         private static const RED:uint   = 0xC51917;
         private static const CLICK_THRESHOLD:Number = 6.0;
+        private static const ZERO_FONT_SIZE:int = 18;
 
         private var _zeroLayer:Sprite;
-        private var _zeroText:TextField;
+        private var _zeroCurrentText:TextField;
+        private var _zeroTargetText:TextField;
         private var _currentDamage:int = 0;
         private var _zeroDamage:int = 0;
         private var _shown:Boolean = false;
@@ -33,22 +35,30 @@ package com.inq.marks
             _zeroLayer.visible = false;
             addChild(_zeroLayer);
 
-            _zeroText = new TextField();
-            _zeroText.selectable = false;
-            _zeroText.mouseEnabled = false;
-            _zeroText.autoSize = TextFieldAutoSize.CENTER;
-            var fmt:TextFormat = new TextFormat();
-            fmt.font = "Arial";
-            fmt.size = 13;
-            fmt.bold = true;
-            fmt.color = 0xFFFFFF;
-            _zeroText.defaultTextFormat = fmt;
-            _zeroLayer.addChild(_zeroText);
+            _zeroCurrentText = _makeZeroText();
+            _zeroTargetText = _makeZeroText();
+            _zeroLayer.addChild(_zeroCurrentText);
+            _zeroLayer.addChild(_zeroTargetText);
 
             addEventListener(MouseEvent.MOUSE_DOWN, _onLocalMouseDown);
             addEventListener(MouseEvent.CLICK, _onLocalClick);
             addEventListener(Event.REMOVED_FROM_STAGE, _onRemoved);
             _drawZeroText();
+        }
+
+        private function _makeZeroText():TextField
+        {
+            var tf:TextField = new TextField();
+            tf.selectable = false;
+            tf.mouseEnabled = false;
+            tf.autoSize = TextFieldAutoSize.LEFT;
+            var fmt:TextFormat = new TextFormat();
+            fmt.font = "Arial";
+            fmt.size = ZERO_FONT_SIZE;
+            fmt.bold = true;
+            fmt.color = 0xFFFFFF;
+            tf.defaultTextFormat = fmt;
+            return tf;
         }
 
         override public function setData(mark:Number, p65:int, p85:int, p95:int, p100:int,
@@ -109,22 +119,29 @@ package com.inq.marks
 
         private function _drawZeroText():void
         {
-            if (!_zeroText) return;
+            if (!_zeroCurrentText || !_zeroTargetText) return;
 
             var zeroColor:uint = (_zeroDamage > 0 && _currentDamage >= _zeroDamage) ? GREEN : RED;
             var ratio:Number = _zeroDamage > 0
                 ? Math.max(0.0, Math.min(1.0, Number(_currentDamage) / Number(_zeroDamage)))
                 : 0.0;
 
-            // Alpha follows progress dynamically: starts dim and becomes fully visible near the zero target.
-            _zeroText.alpha = 0.35 + 0.65 * ratio;
-            _zeroText.htmlText =
-                "<font color=\"#" + _hex6(zeroColor) + "\">" + _currentDamage.toString() + "</font>" +
+            // Only the dynamic current number follows the NEER alpha.
+            _zeroCurrentText.alpha = 0.35 + 0.65 * ratio;
+            _zeroCurrentText.htmlText =
+                "<font color=\"#" + _hex6(zeroColor) + "\">" + _currentDamage.toString() + "</font>";
+
+            // Target part remains solid white.
+            _zeroTargetText.alpha = 1.0;
+            _zeroTargetText.htmlText =
                 "<font color=\"#FFFFFF\">/" + (_zeroDamage > 0 ? _zeroDamage.toString() : "0") + "</font>";
 
-            // Place directly below the NEER delta pill.
-            _zeroText.x = 262 - _zeroText.width * 0.5;
-            _zeroText.y = 157;
+            var totalW:Number = _zeroCurrentText.width + _zeroTargetText.width;
+            var startX:Number = 262 - totalW * 0.5;
+            _zeroCurrentText.x = startX;
+            _zeroCurrentText.y = 154;
+            _zeroTargetText.x = startX + _zeroCurrentText.width;
+            _zeroTargetText.y = 154;
             _updateVisibility();
         }
 
