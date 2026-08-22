@@ -171,11 +171,9 @@ package com.inq.marks
             if (!_zeroCurrentText || !_zeroTargetText) return;
 
             var zeroColor:uint = (_zeroDamage > 0 && _currentDamage >= _zeroDamage) ? GREEN : RED;
-            var ratio:Number = _zeroDamage > 0
-                ? Math.max(0.0, Math.min(1.0, Number(_currentDamage) / Number(_zeroDamage)))
-                : 0.0;
 
-            _zeroCurrentText.alpha = 0.35 + 0.65 * ratio;
+            // No alpha fade on the dynamic value: keep it fully readable.
+            _zeroCurrentText.alpha = 1.0;
             _zeroCurrentText.htmlText =
                 "<font color=\"#" + _hex6(zeroColor) + "\">" + _currentDamage.toString() + "</font>";
 
