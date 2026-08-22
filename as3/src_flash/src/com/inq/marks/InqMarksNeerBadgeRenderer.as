@@ -12,10 +12,11 @@ package com.inq.marks
 
     public class InqMarksNeerBadgeRenderer extends InqMarksBattleRendererBase
     {
-        private static const GREEN:uint = 0x018644;
-        private static const RED:uint   = 0xC51917;
+        // Use the softer Polaroid/Compact text palette instead of the saturated NEER fill colours.
+        private static const GREEN:uint = 0xA6E176;
+        private static const RED:uint   = 0xF16868;
         private static const CLICK_THRESHOLD:Number = 6.0;
-        private static const ZERO_FONT_SIZE:int = 18;
+        private static const ZERO_FONT_SIZE:int = 16;
 
         private var _zeroLayer:Sprite;
         private var _zeroCurrentText:TextField;
@@ -86,6 +87,15 @@ package com.inq.marks
             _drawZeroText();
         }
 
+        // Also follow the normal battle-badge expanded state. This makes Alt work
+        // whether it is delivered by this class directly or by the parent HUD code.
+        override public function setExpanded(value:Boolean):void
+        {
+            _altShown = value;
+            super.setExpanded(value);
+            _updateVisibility();
+        }
+
         override public function dispose():void
         {
             if (_disposedLocal) return;
@@ -103,8 +113,9 @@ package com.inq.marks
             _removeStageListeners();
             _eventStage = stage;
             if (!_eventStage) return;
-            _eventStage.addEventListener(KeyboardEvent.KEY_DOWN, _onKeyDown);
-            _eventStage.addEventListener(KeyboardEvent.KEY_UP, _onKeyUp);
+            // Capture phase makes the Alt listener resilient to other HUD handlers.
+            _eventStage.addEventListener(KeyboardEvent.KEY_DOWN, _onKeyDown, true);
+            _eventStage.addEventListener(KeyboardEvent.KEY_UP, _onKeyUp, true);
         }
 
         private function _onRemoved(e:Event):void
@@ -118,8 +129,8 @@ package com.inq.marks
         private function _removeStageListeners():void
         {
             if (!_eventStage) return;
-            _eventStage.removeEventListener(KeyboardEvent.KEY_DOWN, _onKeyDown);
-            _eventStage.removeEventListener(KeyboardEvent.KEY_UP, _onKeyUp);
+            _eventStage.removeEventListener(KeyboardEvent.KEY_DOWN, _onKeyDown, true);
+            _eventStage.removeEventListener(KeyboardEvent.KEY_UP, _onKeyUp, true);
             _eventStage = null;
         }
 
@@ -168,12 +179,12 @@ package com.inq.marks
                 ? Math.max(0.0, Math.min(1.0, Number(_currentDamage) / Number(_zeroDamage)))
                 : 0.0;
 
-            // Dynamic current value: NEER colour + dynamic alpha.
+            // Only the dynamic current value gets the progress alpha.
             _zeroCurrentText.alpha = 0.35 + 0.65 * ratio;
             _zeroCurrentText.htmlText =
                 "<font color=\"#" + _hex6(zeroColor) + "\">" + _currentDamage.toString() + "</font>";
 
-            // /target stays fully white.
+            // /target stays solid white.
             _zeroTargetText.alpha = 1.0;
             _zeroTargetText.htmlText =
                 "<font color=\"#FFFFFF\">/" + (_zeroDamage > 0 ? _zeroDamage.toString() : "0") + "</font>";
