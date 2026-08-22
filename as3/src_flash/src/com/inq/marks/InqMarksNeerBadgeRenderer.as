@@ -1,11 +1,14 @@
 package com.inq.marks
 {
     import flash.display.Sprite;
+    import flash.display.Stage;
     import flash.events.Event;
+    import flash.events.KeyboardEvent;
     import flash.events.MouseEvent;
     import flash.text.TextField;
     import flash.text.TextFieldAutoSize;
     import flash.text.TextFormat;
+    import flash.ui.Keyboard;
 
     public class InqMarksNeerBadgeRenderer extends InqMarksBattleRendererBase
     {
@@ -20,9 +23,11 @@ package com.inq.marks
         private var _currentDamage:int = 0;
         private var _zeroDamage:int = 0;
         private var _shown:Boolean = false;
+        private var _altShown:Boolean = false;
         private var _clickStartX:Number = 0.0;
         private var _clickStartY:Number = 0.0;
         private var _disposedLocal:Boolean = false;
+        private var _eventStage:Stage = null;
 
         public function InqMarksNeerBadgeRenderer()
         {
@@ -40,8 +45,10 @@ package com.inq.marks
             _zeroLayer.addChild(_zeroCurrentText);
             _zeroLayer.addChild(_zeroTargetText);
 
-            addEventListener(MouseEvent.MOUSE_DOWN, _onLocalMouseDown);
+            // Capture MOUSE_DOWN before the base drag hit stops propagation.
+            addEventListener(MouseEvent.MOUSE_DOWN, _onLocalMouseDown, true);
             addEventListener(MouseEvent.CLICK, _onLocalClick);
+            addEventListener(Event.ADDED_TO_STAGE, _onAdded);
             addEventListener(Event.REMOVED_FROM_STAGE, _onRemoved);
             _drawZeroText();
         }
@@ -83,15 +90,50 @@ package com.inq.marks
         {
             if (_disposedLocal) return;
             _disposedLocal = true;
-            removeEventListener(MouseEvent.MOUSE_DOWN, _onLocalMouseDown);
+            _removeStageListeners();
+            removeEventListener(MouseEvent.MOUSE_DOWN, _onLocalMouseDown, true);
             removeEventListener(MouseEvent.CLICK, _onLocalClick);
+            removeEventListener(Event.ADDED_TO_STAGE, _onAdded);
             removeEventListener(Event.REMOVED_FROM_STAGE, _onRemoved);
             super.dispose();
         }
 
+        private function _onAdded(e:Event):void
+        {
+            _removeStageListeners();
+            _eventStage = stage;
+            if (!_eventStage) return;
+            _eventStage.addEventListener(KeyboardEvent.KEY_DOWN, _onKeyDown);
+            _eventStage.addEventListener(KeyboardEvent.KEY_UP, _onKeyUp);
+        }
+
         private function _onRemoved(e:Event):void
         {
+            _removeStageListeners();
             _shown = false;
+            _altShown = false;
+            _updateVisibility();
+        }
+
+        private function _removeStageListeners():void
+        {
+            if (!_eventStage) return;
+            _eventStage.removeEventListener(KeyboardEvent.KEY_DOWN, _onKeyDown);
+            _eventStage.removeEventListener(KeyboardEvent.KEY_UP, _onKeyUp);
+            _eventStage = null;
+        }
+
+        private function _onKeyDown(e:KeyboardEvent):void
+        {
+            if (e.keyCode != Keyboard.ALTERNATE || _altShown) return;
+            _altShown = true;
+            _updateVisibility();
+        }
+
+        private function _onKeyUp(e:KeyboardEvent):void
+        {
+            if (e.keyCode != Keyboard.ALTERNATE || !_altShown) return;
+            _altShown = false;
             _updateVisibility();
         }
 
@@ -114,7 +156,7 @@ package com.inq.marks
 
         private function _updateVisibility():void
         {
-            if (_zeroLayer) _zeroLayer.visible = _shown;
+            if (_zeroLayer) _zeroLayer.visible = _shown || _altShown;
         }
 
         private function _drawZeroText():void
@@ -126,12 +168,12 @@ package com.inq.marks
                 ? Math.max(0.0, Math.min(1.0, Number(_currentDamage) / Number(_zeroDamage)))
                 : 0.0;
 
-            // Only the dynamic current number follows the NEER alpha.
+            // Dynamic current value: NEER colour + dynamic alpha.
             _zeroCurrentText.alpha = 0.35 + 0.65 * ratio;
             _zeroCurrentText.htmlText =
                 "<font color=\"#" + _hex6(zeroColor) + "\">" + _currentDamage.toString() + "</font>";
 
-            // Target part remains solid white.
+            // /target stays fully white.
             _zeroTargetText.alpha = 1.0;
             _zeroTargetText.htmlText =
                 "<font color=\"#FFFFFF\">/" + (_zeroDamage > 0 ? _zeroDamage.toString() : "0") + "</font>";
