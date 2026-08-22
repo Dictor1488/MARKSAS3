@@ -3,6 +3,7 @@ package com.inq.marks
     import flash.display.Graphics;
     import flash.display.Shape;
     import flash.display.Sprite;
+    import flash.display.Stage;
     import flash.events.Event;
     import flash.events.KeyboardEvent;
     import flash.text.TextField;
@@ -31,6 +32,7 @@ package com.inq.marks
         private var _zeroDamage:int = 0;
         private var _altExpanded:Boolean = false;
         private var _disposedLocal:Boolean = false;
+        private var _eventStage:Stage = null;
 
         public function InqMarksNeerBadgeRenderer()
         {
@@ -100,9 +102,11 @@ package com.inq.marks
 
         private function _onLocalAdded(e:Event):void
         {
-            if (!stage) return;
-            stage.addEventListener(KeyboardEvent.KEY_DOWN, _onLocalKeyDown);
-            stage.addEventListener(KeyboardEvent.KEY_UP, _onLocalKeyUp);
+            _removeStageListeners();
+            _eventStage = stage;
+            if (!_eventStage) return;
+            _eventStage.addEventListener(KeyboardEvent.KEY_DOWN, _onLocalKeyDown);
+            _eventStage.addEventListener(KeyboardEvent.KEY_UP, _onLocalKeyUp);
         }
 
         private function _onLocalRemoved(e:Event):void
@@ -114,9 +118,10 @@ package com.inq.marks
 
         private function _removeStageListeners():void
         {
-            if (!stage) return;
-            stage.removeEventListener(KeyboardEvent.KEY_DOWN, _onLocalKeyDown);
-            stage.removeEventListener(KeyboardEvent.KEY_UP, _onLocalKeyUp);
+            if (!_eventStage) return;
+            _eventStage.removeEventListener(KeyboardEvent.KEY_DOWN, _onLocalKeyDown);
+            _eventStage.removeEventListener(KeyboardEvent.KEY_UP, _onLocalKeyUp);
+            _eventStage = null;
         }
 
         private function _onLocalKeyDown(e:KeyboardEvent):void
@@ -151,7 +156,6 @@ package com.inq.marks
                 : 0.0;
             var fillColor:uint = (_zeroDamage > 0 && _currentDamage >= _zeroDamage) ? GREEN : RED;
 
-            // side connectors / ticks in the same thin NEER language
             g.lineStyle(1.0, GOLD, 0.55, true);
             g.moveTo(BAR_X - 10, BAR_Y);
             g.lineTo(BAR_X, BAR_Y);
@@ -162,13 +166,11 @@ package com.inq.marks
             g.moveTo(BAR_X + BAR_W + 10, BAR_Y - 7);
             g.lineTo(BAR_X + BAR_W + 10, BAR_Y + 7);
 
-            // track
             g.lineStyle(0.8, GOLD, 0.42, true);
             g.beginFill(0x05070A, 0.35);
             g.drawRect(BAR_X, BAR_Y - BAR_H * 0.5, BAR_W, BAR_H);
             g.endFill();
 
-            // current / zero-target fill
             if (pct > 0.0)
             {
                 g.lineStyle();
@@ -178,7 +180,6 @@ package com.inq.marks
                 g.endFill();
             }
 
-            // current position marker
             var mx:Number = BAR_X + BAR_W * pct;
             g.lineStyle(1.5, 0xFFFFFF, 1.0, true);
             g.moveTo(mx, BAR_Y - 5);
