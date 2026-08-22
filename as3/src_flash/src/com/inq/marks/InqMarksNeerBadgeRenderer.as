@@ -12,8 +12,9 @@ package com.inq.marks
 
     public class InqMarksNeerBadgeRenderer extends InqMarksBattleRendererBase
     {
-        private static const GREEN:uint = 0x018644;
-        private static const RED:uint   = 0xC51917;
+        // Match the actual current NEER delta/fill palette.
+        private static const GREEN:uint = 0x00B85A;
+        private static const RED:uint   = 0xD92525;
         private static const CLICK_THRESHOLD:Number = 6.0;
         private static const ZERO_FONT_SIZE:int = 16;
 
@@ -45,7 +46,6 @@ package com.inq.marks
             _zeroLayer.addChild(_zeroCurrentText);
             _zeroLayer.addChild(_zeroTargetText);
 
-            // Capture MOUSE_DOWN before the base drag hit stops propagation.
             addEventListener(MouseEvent.MOUSE_DOWN, _onLocalMouseDown, true);
             addEventListener(MouseEvent.CLICK, _onLocalClick);
             addEventListener(Event.ADDED_TO_STAGE, _onAdded);
@@ -86,8 +86,6 @@ package com.inq.marks
             _drawZeroText();
         }
 
-        // Also follow the normal battle-badge expanded state. This makes Alt work
-        // whether it is delivered by this class directly or by the parent HUD code.
         override public function setExpanded(value:Boolean):void
         {
             _altShown = value;
@@ -112,7 +110,6 @@ package com.inq.marks
             _removeStageListeners();
             _eventStage = stage;
             if (!_eventStage) return;
-            // Capture phase makes the Alt listener resilient to other HUD handlers.
             _eventStage.addEventListener(KeyboardEvent.KEY_DOWN, _onKeyDown, true);
             _eventStage.addEventListener(KeyboardEvent.KEY_UP, _onKeyUp, true);
         }
@@ -178,12 +175,10 @@ package com.inq.marks
                 ? Math.max(0.0, Math.min(1.0, Number(_currentDamage) / Number(_zeroDamage)))
                 : 0.0;
 
-            // Only the dynamic current value gets the progress alpha.
             _zeroCurrentText.alpha = 0.35 + 0.65 * ratio;
             _zeroCurrentText.htmlText =
                 "<font color=\"#" + _hex6(zeroColor) + "\">" + _currentDamage.toString() + "</font>";
 
-            // /target stays solid white.
             _zeroTargetText.alpha = 1.0;
             _zeroTargetText.htmlText =
                 "<font color=\"#FFFFFF\">/" + (_zeroDamage > 0 ? _zeroDamage.toString() : "0") + "</font>";
